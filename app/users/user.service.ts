@@ -8,45 +8,84 @@ import {
   UserWithToken,
 } from "./model/user.model";
 import { JWTService } from "../shared/services/jwt.service";
+import mongoose from "mongoose";
 
 export class UserService {
-  private readonly users: any; // Store the Mongoose model reference
+  private readonly users: any;
   private readonly mapper: UserMapper;
   constructor() {
-    this.users = UsersModel; // Initialize with the Mongoose model
+    this.users = UsersModel;
     this.mapper = new UserMapper();
   }
 
   async create(user: UserForCreate): Promise<User> {
-    let salt = await bcrypt.genSalt(10);
-    let hashPassword = await bcrypt.hash(user.password, salt);
-    user.password = hashPassword;
-    const newUser = await this.users.create(user); // Properly call `create()`
-    return this.mapper.transform(newUser);
+    try {
+      let salt = await bcrypt.genSalt(10);
+      let hashPassword = await bcrypt.hash(user.password, salt);
+      user.password = hashPassword;
+      const newUser = await this.users.create(user);
+      return this.mapper.transform(newUser);
+    } catch (e) {
+      console.error("Registeratoin error:", e);
+      throw new Error("User registeration failed");
+    }
   }
 
-  async login(user: User): Promise<User> {
-    const newUser = await this.users.findOne({ email: user.email }); // Properly call `create()`
-    const token = await JWTService.generateAuthToken(newUser._id);
+  async login(user: User): Promise<User | string> {
+    try {
+      const newUser = await this.users.findOne({ email: user.email });
 
-    const updateUserWithToken = await this.users.findOneAndUpdate(
-      { _id: newUser._id }, // Find user by ID
-      { $set: { accessToken: token } }, // Set token field to null
-      { new: true } // Return the updated document
-    );
+      if (!newUser) {
+        return "User not found";
+      }
 
-    const updatedUser = this.mapper.transform(updateUserWithToken);
+      const isPasswordValid = await bcrypt.compare(
+        user.password,
+        newUser.password
+      );
 
-    return updatedUser;
+      if (!isPasswordValid) {
+        return "Invalid password";
+      }
+
+      const token = await JWTService.generateAuthToken(newUser._id);
+
+      const updateUserWithToken = await this.users.findOneAndUpdate(
+        { _id: newUser._id },
+        { $set: { accessToken: token } },
+        { new: true }
+      );
+
+      if (!updateUserWithToken) {
+        throw new Error("Failed to update user token");
+      }
+
+      // Transform the user object before returning
+      return this.mapper.transform(updateUserWithToken);
+    } catch (e: any) {
+      console.error("Login error:", e.message);
+      throw new Error(e.message || "Authentication failed");
+    }
   }
 
-  async logout(user: User): Promise<User> {
-    const updatedUser = await this.users.findOneAndUpdate(
-      { _id: user._id }, // Find user by ID
-      { $set: { accessToken: null } }, // Set token field to null
-      { new: true } // Return the updated document
-    );
-    return updatedUser;
+  async logout(user: User): Promise<string | null> {
+    try {
+      if (!mongoose.Types.ObjectId.isValid(user._id)) {
+        return "Id must be a valid mongoId";
+      }
+      const updatedUser = await this.users.findOneAndUpdate(
+        { _id: user._id },
+        { $set: { accessToken: null } },
+        { new: true }
+      );
+      if (!updatedUser) {
+        return null;
+      }
+      return "User logged out successfully";
+    } catch (e) {
+      console.error("Logout error:", e);
+      throw new Error("Logout failed");
+    }
   }
 }
 
